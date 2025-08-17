@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/foundation.dart';
 import 'services/cart_service.dart';
 import 'services/offline_service.dart';
 import 'services/memory_service.dart';
@@ -17,18 +18,38 @@ import 'widgets/error_boundary.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  await FirebaseAppCheck.instance.activate(
-    androidProvider: AndroidProvider.playIntegrity,
-  );
   
-    // Initialize offline service
-  final offlineService = OfflineService();
-  await offlineService.initialize();
+  try {
+    await Firebase.initializeApp();
+    
+    // Only activate App Check in release mode to avoid development issues
+    if (kReleaseMode) {
+      await FirebaseAppCheck.instance.activate(
+        androidProvider: AndroidProvider.playIntegrity,
+      );
+    }
+  } catch (e) {
+    debugPrint('Firebase initialization error: $e');
+    // Continue without Firebase for development
+  }
   
-  // Initialize memory service
-  final memoryService = MemoryService();
-  await memoryService.startMonitoring();
+  // Initialize services with error handling
+  OfflineService? offlineService;
+  MemoryService? memoryService;
+  
+  try {
+    offlineService = OfflineService();
+    await offlineService.initialize();
+  } catch (e) {
+    debugPrint('Offline service initialization error: $e');
+  }
+  
+  try {
+    memoryService = MemoryService();
+    await memoryService.startMonitoring();
+  } catch (e) {
+    debugPrint('Memory service initialization error: $e');
+  }
   
   runApp(
     MultiProvider(
@@ -37,11 +58,11 @@ void main() async {
         ChangeNotifierProvider(create: (_) => CartService()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => ProfileProvider()),
-        ChangeNotifierProvider.value(value: offlineService),
-        ChangeNotifierProvider.value(value: memoryService),
+        if (offlineService != null) ChangeNotifierProvider.value(value: offlineService),
+        if (memoryService != null) ChangeNotifierProvider.value(value: memoryService),
       ],
       child: GlobalErrorBoundary(
-      child: MyApp(),
+        child: MyApp(),
       ),
     ),
   );
@@ -371,14 +392,102 @@ class MyApp extends StatelessWidget {
 }
 
 class CartGate extends StatelessWidget {
+  const CartGate({super.key});
+
   @override
   Widget build(BuildContext context) {
-    final cart = Provider.of<CartService>(context);
-    final profile = Provider.of<ProfileProvider>(context);
-    if (!cart.isCartLoaded || profile.loading) {
-      return SplashScreen();
-    }
-    // Replace with your main app's home screen
-    return const DashboardScreen();
+    return Consumer2<CartService, ProfileProvider>(
+      builder: (context, cart, profile, child) {
+        if (!cart.isCartLoaded || profile.loading) {
+          return const SplashScreen();
+        }
+        return const DashboardScreen();
+      },
+    );
   }
 }
+
+// Add a simple fallback app for development
+class SimpleApp extends StatelessWidget {
+  const SimpleApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Super Fruit Center',
+      theme: ThemeData(
+        primarySwatch: Colors.green,
+        useMaterial3: true,
+      ),
+      home: Scaffold(
+        appBar: AppBar(
+          title: const Text('Super Fruit Center'),
+          backgroundColor: const Color(0xFF4CAF50),
+          foregroundColor: Colors.white,
+        ),
+        body: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.local_grocery_store,
+                size: 80,
+                color: Color(0xFF4CAF50),
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Super Fruit Center',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF4CAF50),
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Fresh Fruits Delivered to Your Doorstep',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Colors.grey,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Update MyApp to handle errors gracefully
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // Check if required providers are available
+    try {
+      final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
+      
+      return Consumer<ThemeProvider>(
+        builder: (context, themeProvider, _) => MaterialApp(
+          title: 'Super Fruit Center',
+          theme: _buildLightTheme(),
+          darkTheme: _buildDarkTheme(),
+          themeMode: themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+          debugShowCheckedModeBanner: false,
+          home: const CartGate(),
+          routes: {
+            '/welcome': (context) => const WelcomeScreen(),
+            '/dashboard': (context) => const DashboardScreen(),
+            '/test-notifications': (context) => const TestNotificationsScreen(),
+          },
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error in MyApp: $e');
+      // Fallback to simple app
+      return const SimpleApp();
+    }
+  }
